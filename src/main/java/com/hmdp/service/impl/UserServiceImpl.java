@@ -22,6 +22,7 @@ import javax.annotation.Resource;
 import javax.servlet.http.HttpSession;
 
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -92,7 +93,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
             //保存用户信息到Redis中
             String token = UUID.randomUUID().toString(true);
             UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
-            Map<String,Object> userMap = BeanUtil.beanToMap(userDTO);
+            Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
+                            cn.hutool.core.bean.copier.CopyOptions.create()
+                            .setIgnoreNullValue(true)
+                            .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
             String tokenKey = RedisConstants.LOGIN_USER_KEY + token;
             stringRedisTemplate.opsForHash().putAll(tokenKey,userMap);
             stringRedisTemplate.expire(tokenKey, RedisConstants.LOGIN_USER_TTL, TimeUnit.MINUTES);
