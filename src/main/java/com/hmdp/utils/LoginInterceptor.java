@@ -10,7 +10,7 @@ import javax.servlet.http.HttpSession;
 public class LoginInterceptor implements HandlerInterceptor {
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        //1.获取session
+        //1.获取请求头中的token
         HttpSession session = request.getSession();
         //2.获取session中的用户信息
         Object user = session.getAttribute("user");
