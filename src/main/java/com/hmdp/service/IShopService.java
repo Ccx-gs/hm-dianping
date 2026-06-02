@@ -20,4 +20,8 @@ public interface IShopService extends IService<Shop> {
      * @return 商铺详情数据
      */
     Result queryById(Long id);
+
+    Result update(Shop shop);
+
+    void addShopToBloomFilter(Long id);
 }

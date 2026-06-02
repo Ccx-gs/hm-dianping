@@ -45,6 +45,8 @@ public class ShopController {
     public Result saveShop(@RequestBody Shop shop) {
         // 写入数据库
         shopService.save(shop);
+        // 布隆过滤器添加新商铺id
+        shopService.addShopToBloomFilter(shop.getId());
         // 返回店铺id
         return Result.ok(shop.getId());
     }
@@ -57,8 +59,7 @@ public class ShopController {
     @PutMapping
     public Result updateShop(@RequestBody Shop shop) {
         // 写入数据库
-        shopService.updateById(shop);
-        return Result.ok();
+        return shopService.update(shop);
     }
 
     /**
