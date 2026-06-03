@@ -9,7 +9,7 @@ import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.BloomFilter;
-import com.hmdp.utils.LoginInterceptor;
+import com.hmdp.utils.CacheClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,7 +39,10 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private BloomFilter bloomFilter;
 
-    // 启动时初始化布隆过滤器，加载已有商铺id
+    @Resource
+    private CacheClient cacheClient;
+
+    // 启动时初始化布隆过滤器
     @PostConstruct
     public void initBloomFilter() {
         if (bloomFilter.exists(BLOOM_FILTER_SHOP_KEY)) {
@@ -51,7 +54,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         }
     }
 
-    // 新增商铺时同步添加至布隆过滤器
+    // 新增商铺时同步布隆过滤器
     public void addShopToBloomFilter(Long id) {
         bloomFilter.add(BLOOM_FILTER_SHOP_KEY, id);
     }
@@ -64,90 +67,34 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             return Result.fail("商铺不存在!");
         }
         // 缓存击穿+穿透：互斥锁重建缓存
-        Shop shop = queryWithMutex(id);
+        Shop shop = cacheClient.queryWithMutex(
+                CACHE_SHOP_KEY + id,                // 缓存key
+                LOCK_SHOP_KEY + id,                 // 锁key
+                Shop.class,                         // 返回类型
+                () -> getById(id),                  // DB查询回调
+                CACHE_SHOP_TTL, TimeUnit.MINUTES,   // 缓存有效期
+                CACHE_NULL_TTL                      // 空值有效期
+        );
         if (shop == null) {
             return Result.fail("商铺不存在!");
         }
         return Result.ok(shop);
     }
 
-    // ==================== 互斥锁 ====================
-
-    // 获取互斥锁，有效期10秒
-    private boolean tryLock(String key) {
-        Boolean flag = stringRedisTemplate.opsForValue()
-                .setIfAbsent(key, "1", LOCK_SHOP_TTL, TimeUnit.SECONDS);
-        return Boolean.TRUE.equals(flag);
-    }
-
-    // 释放互斥锁
-    private void unlock(String key) {
-        stringRedisTemplate.delete(key);
-    }
-
-    // ==================== 缓存击穿+穿透综合方案 ====================
-
-    private Shop queryWithMutex(Long id) {
-        String key = CACHE_SHOP_KEY + id;
-        // 1. 查Redis缓存
-        String shopJson = stringRedisTemplate.opsForValue().get(key);
-        if (StrUtil.isNotBlank(shopJson)) {
-            return JSONUtil.toBean(shopJson, Shop.class);
-        }
-        // 命中空值，防止穿透
-        if (shopJson != null) {
-            return null;
-        }
-        // 2. 获取互斥锁
-        String lockKey = LOCK_SHOP_KEY + id;
-        if (!tryLock(lockKey)) {
-            // 3. 获取失败，休眠后重试
-            try {
-                Thread.sleep(50);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-            return queryWithMutex(id);
-        }
-        try {
-            // 4. 双重检查：其他线程可能已重建缓存
-            shopJson = stringRedisTemplate.opsForValue().get(key);
-            if (StrUtil.isNotBlank(shopJson)) {
-                return JSONUtil.toBean(shopJson, Shop.class);
-            }
-            if (shopJson != null) {
-                return null;
-            }
-            // 5. 查数据库
-            Shop shop = getById(id);
-            // 6. 数据库不存在，缓存空值防穿透
-            if (shop == null) {
-                stringRedisTemplate.opsForValue().set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
-                return null;
-            }
-            // 7. 数据库存在，写入Redis
-            stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(shop), CACHE_SHOP_TTL, TimeUnit.MINUTES);
-            return shop;
-        } finally {
-            // 8. 释放锁
-            unlock(lockKey);
-        }
-    }
-
-    // ==================== 原始缓存穿透方案（供学习参考） ====================
+    // ==================== 以下为两种缓存方案的调用示例（供学习参考） ====================
     //
+    // // 方案一：缓存穿透（仅缓存空值，无互斥锁）
     // private Shop queryWithPassThrough(Long id) {
-    //     String key = CACHE_SHOP_KEY + id;
-    //     String shopJson = stringRedisTemplate.opsForValue().get(key);
-    //     if (StrUtil.isNotBlank(shopJson)) {
-    //         return JSONUtil.toBean(shopJson, Shop.class);
-    //     }
-    //     Shop shop = getById(id);
-    //     if (shop == null) {
-    //         return null;
-    //     }
-    //     stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(shop), CACHE_SHOP_TTL, TimeUnit.MINUTES);
-    //     return shop;
+    //     return cacheClient.queryWithPassThrough(
+    //             CACHE_SHOP_KEY + id, Shop.class, () -> getById(id),
+    //             CACHE_SHOP_TTL, TimeUnit.MINUTES, CACHE_NULL_TTL);
+    // }
+    //
+    // // 方案二：缓存击穿（互斥锁 + 缓存空值）
+    // private Shop queryWithMutex(Long id) {
+    //     return cacheClient.queryWithMutex(
+    //             CACHE_SHOP_KEY + id, LOCK_SHOP_KEY + id, Shop.class, () -> getById(id),
+    //             CACHE_SHOP_TTL, TimeUnit.MINUTES, CACHE_NULL_TTL);
     // }
 
     @Override
